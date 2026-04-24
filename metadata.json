@@ -1,0 +1,6 @@
+{
+  "name": "JARVIS",
+  "description": "J.A.R.V.I.S. Personal Assistant - A futuristic AI assistant with holographic HUD, biometric authentication, and voice control inspired by Tony Stark's assistant.",
+  "requestFramePermissions": ["microphone", "camera", "geolocation"],
+  "majorCapabilities": []
+}
