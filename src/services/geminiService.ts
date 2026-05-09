@@ -74,6 +74,30 @@ const getLocationTool: FunctionDeclaration = {
   }
 };
 
+const generateImageTool: FunctionDeclaration = {
+  name: "generate_image",
+  description: "Génère une image à partir d'une description textuelle (prompt).",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      prompt: { type: Type.STRING, description: "Description détaillée de l'image à générer." }
+    },
+    required: ["prompt"]
+  }
+};
+
+const generateVideoTool: FunctionDeclaration = {
+  name: "generate_video",
+  description: "Génère une courte vidéo à partir d'une description textuelle (prompt).",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      prompt: { type: Type.STRING, description: "Description de la scène vidéo à générer." }
+    },
+    required: ["prompt"]
+  }
+};
+
 const socialScanTool: FunctionDeclaration = {
   name: "social_scan",
   description: "Recherche l'identité d'une personne sur les réseaux sociaux à partir d'une image fournie ou d'une description.",
@@ -116,11 +140,11 @@ export async function askJarvis(prompt: string, history: { role: 'user' | 'model
         { role: 'user', parts }
       ],
       config: {
-        systemInstruction: SYSTEM_INSTRUCTIONS + "\nEXTRÊME BREVITÉ REQUISE. Une phrase maximum si possible. Vous pouvez analyser des photos, vidéos, audio et fichiers. Pour localiser l'utilisateur, utilisez toujours l'outil 'get_current_location'.",
+        systemInstruction: SYSTEM_INSTRUCTIONS + "\nEXTRÊME BREVITÉ REQUISE. Une phrase maximum si possible. Vous pouvez analyser des photos, vidéos, audio et fichiers. Pour localiser l'utilisateur, utilisez toujours l'outil 'get_current_location'. Pour générer des visuels, utilisez 'generate_image' ou 'generate_video'.",
         temperature: 0.1,
         topP: 0.1,
         tools: [
-          { functionDeclarations: [manageTasksTool, controlUITool, searchMapTool, getLocationTool, socialScanTool, getAppLinkTool] } as any,
+          { functionDeclarations: [manageTasksTool, controlUITool, searchMapTool, getLocationTool, socialScanTool, getAppLinkTool, generateImageTool, generateVideoTool] } as any,
           // @ts-ignore
           { googleSearch: {} }
         ],
@@ -140,30 +164,86 @@ export async function textToSpeech(text: string) {
     const ai = getAI();
     const response = await ai.models.generateContent({
       model: "gemini-3.1-flash-tts-preview",
-      contents: [{ parts: [{ text: `Agissez comme JARVIS. Votre voix doit être extrêmement organique, humaine et chaleureuse, sans aucune trace de timbre robotique ou synthétique. Parlez avec des inflexions naturelles, comme un assistant humain très sophistiqué et intelligent. Soyez précis, concis et réactif. Dites : ${text}` }] }],
+      contents: [{ parts: [{ text: `Agissez comme JARVIS. Votre voix doit être extrêmement organique, humaine et chaleureuse, sans aucune trace de timbre robotique ou synthétique. Parlez avec des inflexions naturelles, comme un assistant humain très sophistiqué et intelligent. Dites : ${text}` }] }],
       config: {
         // @ts-ignore
         responseModalities: [Modality.AUDIO],
         speechConfig: {
           voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: 'Fenrir' },
+            prebuiltVoiceConfig: { voiceName: 'Kore' },
           },
         },
       } as any,
     });
 
-    const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    const base64Audio = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData?.data;
     if (base64Audio) {
       return base64Audio;
     }
     return null;
   } catch (error: any) {
-    // If it's a 429, we don't want to spam the console excessively as we have a fallback
     if (error?.status === 429 || error?.message?.includes('429')) {
       console.warn("TTS Quota exceeded, switching to secondary protocol.");
+    } else if (error?.status === 403 || error?.message?.includes('403')) {
+      console.warn("TTS Permission Denied: L'accès aux voix premium nécessite une clé API active.");
     } else {
       console.error("TTS error:", error);
     }
     return null;
+  }
+}
+
+export async function generateImage(prompt: string) {
+  try {
+    const ai = getAI();
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash-image",
+      contents: { parts: [{ text: prompt }] },
+      config: {
+        imageConfig: { aspectRatio: "1:1" }
+      }
+    });
+
+    const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+    if (part?.inlineData?.data) {
+      return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+    }
+    return null;
+  } catch (error: any) {
+    console.error("Image gen error:", error);
+    if (error?.status === 403) {
+      throw new Error("PERMISSION_DENIED: Veuillez sélectionner une clé API valide dans les paramètres AI Studio.");
+    }
+    return null;
+  }
+}
+
+export async function generateVideo(prompt: string) {
+  try {
+    // Check for API key if window.aistudio is available
+    if (typeof window !== 'undefined' && (window as any).aistudio) {
+      const hasKey = await (window as any).aistudio.hasSelectedApiKey();
+      if (!hasKey) {
+        throw new Error("NO_KEY_SELECTED: Veuillez cliquer sur le bouton d'installation de clé API pour utiliser Veo.");
+      }
+    }
+
+    const ai = getAI();
+    const operation = await ai.models.generateVideos({
+      model: 'veo-3.1-lite-generate-preview',
+      prompt: prompt,
+      config: {
+        numberOfVideos: 1,
+        resolution: '720p',
+        aspectRatio: '16:9'
+      },
+    });
+    return operation;
+  } catch (error: any) {
+    console.error("Video gen error:", error);
+    if (error?.status === 403 || error?.message?.includes('403')) {
+       throw new Error("PERMISSION_DENIED: L'accès à Veo nécessite une clé API payante configurée dans AI Studio.");
+    }
+    throw error;
   }
 }

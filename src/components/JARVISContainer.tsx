@@ -1,10 +1,10 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Terminal, Send, Bot, User, Mic, MicOff, CheckSquare, Square, Calendar, Volume2, Radio, Paperclip, Image as ImageIcon, MapPin, Search, Heart } from 'lucide-react';
+import { Terminal, Send, Bot, User, Mic, MicOff, CheckSquare, Square, Calendar, Volume2, Radio, Paperclip, Image as ImageIcon, MapPin, Search, Heart, Key } from 'lucide-react';
 import { HUD } from './HUD';
 import { VisualID } from './VisualID';
 import { MapDisplay } from './MapDisplay';
-import { askJarvis } from '../services/geminiService';
+import { askJarvis, generateImage, generateVideo } from '../services/geminiService';
 import { jarvisVoice } from '../lib/voice';
 import { soundManager } from '../lib/sounds';
 import { cn } from '../lib/utils';
@@ -38,6 +38,7 @@ export const JARVISContainer = () => {
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [isVoiceEnabled, setIsVoiceEnabled] = useState(true);
   const [isLiveMode, setIsLiveMode] = useState(false);
+  const [showKeyAlert, setShowKeyAlert] = useState(false);
   const [accentColor, setAccentColor] = useState('#22d3ee');
   const [isLocked, setIsLocked] = useState(true);
   const [showMobileStats, setShowMobileStats] = useState(false);
@@ -184,6 +185,49 @@ export const JARVISContainer = () => {
       addLog(`Lien de l'application GRID : ${url}`);
       addLog("Vous pouvez partager ce lien ou l'utiliser pour installer l'application sur vos appareils (PWA).");
       soundManager.playSuccess();
+    } else if (name === 'generate_image') {
+      const { prompt } = args;
+      addLog(`Génération d'image : ${prompt}`);
+      generateImage(prompt).then(url => {
+        if (url) {
+          addLog("Image générée avec succès.");
+          setMessages(prev => [...prev, {
+            role: 'model',
+            content: `Voici l'image générée pour : "${prompt}"`,
+            timestamp: new Date(),
+            attachment: url
+          } as any]);
+          soundManager.playSuccess();
+        } else {
+          addLog("Échec de la génération d'image.");
+          soundManager.playError();
+        }
+      }).catch(err => {
+        addLog(`Image Error : ${err.message}`);
+        soundManager.playError();
+      });
+    } else if (name === 'generate_video') {
+      const { prompt } = args;
+      addLog(`Génération de vidéo initiée : ${prompt}`);
+      addLog("Processus lourd en cours... Cela peut prendre quelques instants.");
+      generateVideo(prompt).then(op => {
+        if (op) {
+          addLog("Opération vidéo enregistrée. Vérifiez vos fichiers bientôt.");
+          soundManager.playSuccess();
+        } else {
+          addLog("Échec de l'initialisation vidéo.");
+          soundManager.playError();
+        }
+      }).catch(err => {
+        addLog(`Veo Error : ${err.message}`);
+        soundManager.playError();
+        // If it's a key issue, maybe we should offer to open the key selector
+        if (err.message.includes("PERMISSION_DENIED") || err.message.includes("NO_KEY_SELECTED")) {
+          addLog("Suggestion : Utilisez le bouton 'PROTOCOLES' pour configurer votre clé API.");
+          setShowKeyAlert(true);
+          setTimeout(() => setShowKeyAlert(false), 5000);
+        }
+      });
     }
   }, []);
 
@@ -331,6 +375,16 @@ export const JARVISContainer = () => {
     }
   }, [isListening, isThinking]); // No circular dependency here, but handleSubmit needs it
 
+  const handleKeySelection = async () => {
+    if ((window as any).aistudio?.openSelectKey) {
+      addLog("Ouverture du gestionnaire de clés API...");
+      await (window as any).aistudio.openSelectKey();
+      addLog("Clé API sélectionnée. Protocoles avancés déverrouillés.");
+    } else {
+      addLog("Action non disponible dans cet environnement.");
+    }
+  };
+
   return (
     <>
       <AnimatePresence>
@@ -376,6 +430,19 @@ export const JARVISContainer = () => {
           <div className="hidden xs:flex flex-col items-end">
             <span className="text-[7px] uppercase opacity-40">Horloge</span>
             <span className="font-mono text-white">{currentTime}</span>
+          </div>
+          <div className="flex flex-col items-end">
+            <span className="text-[7px] uppercase opacity-40">Protocoles</span>
+            <motion.button 
+              onClick={handleKeySelection}
+              animate={showKeyAlert ? { scale: [1, 1.2, 1], color: ['#22d3ee', '#ef4444', '#22d3ee'] } : {}}
+              transition={{ repeat: showKeyAlert ? Infinity : 0, duration: 1 }}
+              className="flex items-center gap-1 font-bold h-5 md:h-auto hover:text-cyan-400 transition-colors"
+              style={{color: accentColor}}
+              title="Configurer la Clé API pour les fonctions avancées (Veo, etc.)"
+            >
+              <Key size={10} className={cn(showKeyAlert && "animate-bounce")} /> <span className="hidden xs:inline">ADVANCED</span><span className="xs:hidden">KEYS</span>
+            </motion.button>
           </div>
           <div className="flex flex-col items-end">
             <span className="text-[7px] uppercase opacity-40">Live</span>
@@ -471,13 +538,18 @@ export const JARVISContainer = () => {
                       {msg.role === 'model' ? 'JARVIS_MAIN_FRAME' : 'AUTH_USER_ROOT'}
                     </div>
                     <div className={cn(
-                      "px-4 py-2 border relative group min-w-[100px] max-w-[80%]",
+                      "px-4 py-2 border relative group min-w-[100px] max-w-[80%] whitespace-pre-wrap",
                       msg.role === 'user' 
                         ? "bg-cyan-400/5 text-cyan-100 border-cyan-500/30" 
                         : "bg-white/5 text-slate-100 border-white/10"
                     )} style={{borderColor: msg.role === 'user' ? `${accentColor}44` : undefined}}>
                       <div className="absolute -left-1 top-0 w-1 h-2 bg-cyan-400 opacity-0 group-hover:opacity-100 transition-opacity" />
                       {msg.content}
+                      {(msg as any).attachment && (
+                        <div className="mt-2 border border-white/10 rounded overflow-hidden">
+                          <img src={(msg as any).attachment} alt="Generated" className="w-full h-auto" />
+                        </div>
+                      )}
                     </div>
                   </motion.div>
                 ))}
@@ -506,9 +578,9 @@ export const JARVISContainer = () => {
               </div>
             )}
 
-            <form onSubmit={handleSubmit} className="p-2 border-t border-cyan/10 bg-black/40">
-              <div className="flex items-center gap-3">
-                <div className="flex gap-1">
+            <form onSubmit={handleSubmit} className="p-3 border-t border-cyan/10 bg-black/60">
+              <div className="flex items-end gap-3 min-h-[50px]">
+                <div className="flex gap-1 mb-1">
                   <button
                     type="button"
                     onClick={toggleVoice}
@@ -525,21 +597,41 @@ export const JARVISContainer = () => {
                     <Paperclip size={18} />
                   </label>
                 </div>
-                <div className="flex-1 border-b border-cyan-500/20 flex items-center px-2 py-1 bg-cyan-900/10">
-                  <span className="text-[10px] font-bold mr-2 tracking-tighter opacity-70" style={{color: accentColor}}>JARVIS_ID@{isListening ? "LSTN" : "IDLE"} :</span>
-                  <input
-                    type="text"
-                    value={input}
-                    onChange={(e) => {
-                      setInput(e.target.value);
-                      soundManager.playTyping();
-                    }}
-                    placeholder={isListening ? "Écoute active..." : "Saisissez votre commande..."}
-                    className="flex-1 bg-transparent border-none text-sm text-cyan-50 focus:outline-none placeholder:opacity-20"
-                  />
-                  <button type="submit" className="p-2 opacity-70 hover:opacity-100" style={{color: accentColor}}>
-                    <Send size={16} />
-                  </button>
+                <div className="flex-1 border border-cyan-500/20 flex flex-col px-3 py-2 bg-cyan-900/10 rounded-lg group focus-within:border-cyan-400/50 transition-colors">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[9px] font-bold tracking-tighter opacity-70 uppercase" style={{color: accentColor}}>
+                      JARVIS_ID@{isListening ? "LSTN" : "IDLE"}
+                    </span>
+                    <span className="text-[8px] opacity-30 uppercase font-mono">Shift+Enter pour saut de ligne</span>
+                  </div>
+                  <div className="flex items-end gap-2 text-cyan-50">
+                    <textarea
+                      value={input}
+                      rows={Math.min(5, input.split('\n').length || 1)}
+                      onChange={(e) => {
+                        setInput(e.target.value);
+                        soundManager.playTyping();
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          handleSubmit();
+                        }
+                      }}
+                      placeholder={isListening ? "Écoute active..." : "Saisissez votre commande..."}
+                      className="flex-1 bg-transparent border-none text-sm focus:outline-none placeholder:opacity-20 resize-none py-1 custom-scrollbar"
+                    />
+                    <button 
+                      type="submit" 
+                      className={cn(
+                        "p-2 transition-all",
+                        input.trim() ? "opacity-100 scale-110" : "opacity-30 scale-100"
+                      )} 
+                      style={{color: accentColor}}
+                    >
+                      <Send size={16} />
+                    </button>
+                  </div>
                 </div>
               </div>
             </form>
